@@ -8,6 +8,26 @@
 
 using UL = std::unique_lock<std::mutex>;
 
+class UnlockGuard {
+private:
+    std::mutex& d_mutex;
+
+public:
+    explicit UnlockGuard(std::mutex& m)
+        : d_mutex(m)
+    {
+        d_mutex.unlock();
+    }
+
+    ~UnlockGuard()
+    {
+        d_mutex.lock();
+    }
+
+    UnlockGuard(const UnlockGuard&) = delete;
+    UnlockGuard& operator=(const UnlockGuard&) = delete;
+};
+
 
 // =============
 // class Batcher
@@ -102,17 +122,22 @@ template <typename T>
 void Batcher<T>::run()
 {
     while (!shouldStop()) {
-        while (!shouldStop() && size() < d_batchSize) {
+
+        UL lock(d_mutex);
+
+        while (d_state == ST_STARTED && d_queue.size() < d_batchSize) {
+            d_cv.wait_for(lock, std::chrono::seconds(d_waitTime));
 
             {
-                UL lock(d_mutex);
-                d_cv.wait_for(lock, std::chrono::seconds(d_waitTime));
+                UnlockGuard guard(d_mutex);
+                processItems(d_batchSize);
             }
-
-            processItems(d_batchSize);
         }
 
-        processItems(d_batchSize);
+        {
+            UnlockGuard guard(d_mutex);
+            processItems(d_batchSize);
+        }
     }
 }
 
